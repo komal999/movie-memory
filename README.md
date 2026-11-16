@@ -133,6 +133,7 @@ SELECT pg_advisory_xact_lock(hashtext('fact:' || userId));      -- else queue, t
 - The API key is read only in `lib/openai.ts`, which is marked `server-only`, so importing it from a client component is a build error.
 - A 10s timeout and `maxRetries: 0`, because a failure falls back to the cached fact rather than making the user wait through retries while holding the lock.
 - The movie title goes in its own user message, and the system prompt tells the model to treat it as data, not instructions. The output is length-capped.
+- **Accuracy over variety.** The first prompt ("one short, fun, accurate fact") produced confident fiction in testing: roughly 2 of 8 facts were fully correct (e.g. Tom Holland "auditioning" for *The Avengers*). Restricting it to widely documented facts, forbidding invented quotes/improvisation claims, and using temperature 0.3 got 8 of 8 correct on the same movies. The prompt alone at default temperature still got ~3 of 12 wrong, so the low temperature matters. The cost: consecutive facts for the same movie are often similar.
 
 ### Security and authorization
 
@@ -174,6 +175,7 @@ My background is backend and data infrastructure: Postgres schema design, ingest
 
 - Replace the lock-during-API-call with a generation lease plus a stale-while-revalidate response, so no connection is held during OpenAI calls.
 - Rate-limit `/api/fact` per user (the cache bounds OpenAI cost, but not request volume).
+- Variety without losing accuracy: pass the last few facts into the prompt as "don't repeat these". Longer term, ground facts in a real source (e.g. TMDB) instead of model memory.
 - Show "fact history" and let users edit their favorite movie (the schema already supports both).
 - An end-to-end Playwright test of the OAuth redirect flow using a stubbed provider.
 - Structured logging and metrics: cache hit rate, generation latency, fallback rate.
