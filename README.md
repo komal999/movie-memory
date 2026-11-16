@@ -2,6 +2,8 @@
 
 Sign in with Google, save your favorite movie, get a fun fact about it from OpenAI.
 
+**Live demo: https://movie-memory-xi.vercel.app** (Vercel + Neon Postgres; any Google account can sign in)
+
 **Variant chosen: A (backend: caching and correctness).** See [Why Variant A](#why-variant-a).
 
 Stack: Next.js 16 (App Router) · TypeScript · React 19 · Tailwind v4 · Postgres · Prisma 7 · Auth.js v5 (Google) · OpenAI · Vitest
