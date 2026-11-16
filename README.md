@@ -173,7 +173,6 @@ My background is backend and data infrastructure: Postgres schema design, ingest
 - Show "fact history" and let users edit their favorite movie (the schema already supports both).
 - An end-to-end Playwright test of the OAuth redirect flow using a stubbed provider.
 - Structured logging and metrics: cache hit rate, generation latency, fallback rate.
-- A Docker Compose file for Postgres plus CI running the integration tests.
 
 ---
 

@@ -4,9 +4,9 @@ import path from "node:path";
 export default defineConfig({
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "."),
+      "@": path.resolve(import.meta.dirname, "."),
       // `server-only` throws outside the React Server bundle; it's a no-op in tests.
-      "server-only": path.resolve(__dirname, "tests/helpers/empty.ts"),
+      "server-only": path.resolve(import.meta.dirname, "tests/helpers/empty.ts"),
     },
   },
   test: {
