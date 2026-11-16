@@ -180,6 +180,7 @@ My background is backend and data infrastructure: Postgres schema design, ingest
 
 - Replace the lock-during-API-call with a generation lease plus a stale-while-revalidate response, so no connection is held during OpenAI calls.
 - Rate-limit `/api/fact` per user (the cache bounds OpenAI cost, but not request volume).
+- Stop storing Google OAuth tokens. The Auth.js Prisma adapter saves `access_token`, `refresh_token` and `id_token` in `Account` by default, but the app never calls Google APIs, so they're pure liability. Wrap the adapter's `linkAccount` to drop them before they're written.
 - Variety without losing accuracy: pass the last few facts into the prompt as "don't repeat these". Longer term, ground facts in a real source (e.g. TMDB) instead of model memory.
 - Show "fact history" and let users edit their favorite movie (the schema already supports both).
 - An end-to-end Playwright test of the OAuth redirect flow using a stubbed provider.
