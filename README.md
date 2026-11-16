@@ -61,6 +61,7 @@ app/
   page.tsx                  Landing: "Sign in with Google" (redirects if already signed in)
   onboarding/               First-time favorite-movie form (Server Action + useActionState)
   dashboard/                Profile, favorite movie, logout, <FactCard/> (client)
+  privacy/                  Static privacy page (required to publish the Google OAuth consent screen)
   api/fact/route.ts         GET → fact for the *current* user (Variant A logic)
   api/facts/[id]/route.ts   GET → one stored fact, only if you own it
   api/auth/[...nextauth]/   Auth.js handlers

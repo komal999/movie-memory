@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signIn } from "@/auth";
 import { getCurrentUser } from "@/lib/session";
@@ -27,6 +28,9 @@ export default async function LandingPage() {
             Sign in with Google
           </button>
         </form>
+        <Link href="/privacy" className="text-sm text-stone-500 underline">
+          Privacy
+        </Link>
       </div>
     </main>
   );
