@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+// Connection URL lives in prisma.config.ts (Prisma 7).
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- App data ----------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  // Null until onboarding is complete. "Has a favorite movie" is the single
+  // source of truth for "is this a first-time user?".
+  favoriteMovie String?   @db.VarChar(120)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+  facts    Fact[]
+}
+
+// Append-only log of generated facts. The cache is simply "the newest row for
+// (userId, movieTitle)", so no separate cache table or TTL column is needed.
+model Fact {
+  id         String   @id @default(cuid())
+  userId     String
+  // Snapshot of the movie the fact was generated for. If the user's favorite
+  // movie ever changes, old facts can't be served as a cache hit for the new one.
+  movieTitle String   @db.VarChar(120)
+  content    String
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Serves the hot query: newest fact for this user + movie.
+  @@index([userId, movieTitle, createdAt(sort: Desc)])
+}
+
+// ---------- Auth.js (Prisma adapter, database sessions) ----------
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
