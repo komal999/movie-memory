@@ -10,7 +10,7 @@ Stack: Next.js 16 (App Router) · TypeScript · React 19 · Tailwind v4 · Postg
 
 ## Setup
 
-Requires Node 20.9+ (tested on 22). Postgres comes from Docker, or bring your own 14+.
+Requires Node `^20.19 || ^22.12 || >=24` (Prisma 7 rejects Node 23; `.nvmrc` pins 22). Postgres comes from Docker, or bring your own 14+.
 
 ```bash
 docker compose up -d        # Postgres 16 on :5432 (+ a movie_memory_test DB for tests)
