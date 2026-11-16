@@ -164,7 +164,9 @@ The fact service depends on a small `FactStore` interface. The logic runs agains
 
 ## Why Variant A
 
-My background is backend and data infrastructure: Postgres schema design, ingestion pipelines, LLM integration. Variant A's core problems are the interesting ones there: picking the cache key, making a time window correct, reasoning about concurrent writers, and degrading gracefully when a third-party API fails. They also have crisp, testable correctness properties ("N concurrent requests → exactly 1 OpenAI call"), which I can prove with tests rather than just assert.
+I picked Variant A because its hard parts are correctness problems, and those can be proven with tests rather than just claimed. "A burst of N requests produces exactly one OpenAI call" and "a fact that's 59.999 seconds old is a cache hit, but one that's 60 seconds old isn't" are either true or false, and I wanted a submission where the tests settle it.
+
+It's also closest to the backend and data work I do day to day, and it's where real systems tend to break: requests racing to do the same expensive work, a third-party API timing out at the worst moment, and a cache that's subtly wrong. Testing those paths under load surfaced a real bug: an early version made a second OpenAI call during an outage, and two requests got raw 500s. The fix and the test that pins it are in the repo.
 
 ## Key tradeoffs
 
@@ -190,7 +192,8 @@ My background is backend and data infrastructure: Postgres schema design, ingest
 
 ## AI usage
 
-- Used an AI assistant (Claude) to scaffold boilerplate (Auth.js and Prisma setup, Tailwind markup) and to draft parts of this README.
-- Design decisions are mine and I can walk through each one: the schema, the cache key, the advisory-lock approach, the fallback semantics and the test strategy.
-- Used AI to check Next.js 16 and Prisma 7 changes (middleware renamed to `proxy`, `prisma.config.ts`, driver adapters), then verified against the docs bundled in `node_modules`.
-- All code was reviewed, type-checked, linted and tested. The lock test was mutation-checked: removing the lock makes it fail.
+- I used Claude (Claude Code) as a pair programmer throughout, for implementation, tests, docs and running verification checks; the commits credit it with a `Co-Authored-By` trailer. I own the design, scope and tradeoff decisions, and can walk through any part of the code.
+- "It works" wasn't the bar. I kept pushing on failure modes, asking what happens during an OpenAI outage, a burst of requests, a database blip, a hostile movie title, or a request for someone else's data, and had each one probed against the real system rather than reasoned about. That's what turned up the outage-burst bug, the missing JSON error handling, the missing error page, and the prompt-injection behavior documented above.
+- The facts themselves got the same scrutiny. During manual end-to-end testing, the facts the app returned turned out to be confidently wrong (for example, attributing a famous *Iron Man* line to *The Avengers*). Rather than tweak the prompt by feel, we compared prompt variants on real OpenAI calls across four movies and checked every fact: the original prompt got about 2 of 8 right; restricting it to documented facts at temperature 0.3 got 8 of 8. That shipped the same day.
+- Verification also caught AI mistakes in the code: the first concurrency design retried OpenAI during outages, and the error page initially used an API that changed in Next.js 16.
+- Nothing was taken on trust. Every change was linted, type-checked and tested; the lock tests were mutation-checked; framework behavior was checked against the Next.js 16 and Prisma 7 docs bundled in `node_modules`; and I tested the full flow end to end by hand, locally and in production.
