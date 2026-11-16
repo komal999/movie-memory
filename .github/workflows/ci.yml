@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: movie_memory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/movie_memory_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/movie_memory_test
+      # Placeholders so `next build` can evaluate auth config; never real secrets in CI.
+      AUTH_SECRET: ci-only-placeholder-secret
+      AUTH_GOOGLE_ID: placeholder
+      AUTH_GOOGLE_SECRET: placeholder
+      AUTH_TRUST_HOST: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests (unit + Postgres integration)
+        run: npx vitest run
+
+      - name: Production build
+        run: npx next build
