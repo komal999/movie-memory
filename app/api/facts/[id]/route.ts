@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { apiError, apiOk } from "@/lib/api-response";
+import { apiError, apiOk, internalError } from "@/lib/api-response";
 import { getFactById } from "@/lib/fact-service";
 
 /**
@@ -7,13 +7,17 @@ import { getFactById } from "@/lib/fact-service";
  * Another user's fact returns 404 (not 403) so ids can't be probed for existence.
  */
 export async function GET(_req: Request, ctx: RouteContext<"/api/facts/[id]">) {
-  const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) return apiError(401, "UNAUTHORIZED", "Please sign in.");
+  try {
+    const session = await auth();
+    const userId = session?.user?.id;
+    if (!userId) return apiError(401, "UNAUTHORIZED", "Please sign in.");
 
-  const { id } = await ctx.params;
-  const fact = await getFactById(id, userId);
-  if (!fact) return apiError(404, "NOT_FOUND", "Fact not found.");
+    const { id } = await ctx.params;
+    const fact = await getFactById(id, userId);
+    if (!fact) return apiError(404, "NOT_FOUND", "Fact not found.");
 
-  return apiOk({ fact });
+    return apiOk({ fact });
+  } catch (err) {
+    return internalError(err);
+  }
 }

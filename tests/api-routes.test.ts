@@ -41,6 +41,23 @@ describe("GET /api/fact", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: { code: "GENERATION_FAILED", message: "Try again." } });
   });
+
+  it("returns a JSON 500 without internals when the database throws", async () => {
+    auth.mockResolvedValue({ user: { id: "alice" } });
+    getFact.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.5:5432"));
+    const res = await getFactRoute();
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.code).toBe("INTERNAL");
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|5432/);
+  });
+
+  it("returns a JSON 500 when the session lookup itself throws", async () => {
+    auth.mockRejectedValue(new Error("db down"));
+    const res = await getFactRoute();
+    expect(res.status).toBe(500);
+    expect((await res.json()).error.code).toBe("INTERNAL");
+  });
 });
 
 describe("GET /api/facts/:id", () => {
@@ -56,5 +73,13 @@ describe("GET /api/facts/:id", () => {
     const res = await getFactByIdRoute(new Request("http://x"), ctx("alices-fact"));
     expect(res.status).toBe(404);
     expect(getFactById).toHaveBeenCalledWith("alices-fact", "bob");
+  });
+
+  it("returns a JSON 500 without internals when the database throws", async () => {
+    auth.mockResolvedValue({ user: { id: "bob" } });
+    getFactById.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.5:5432"));
+    const res = await getFactByIdRoute(new Request("http://x"), ctx("f1"));
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(await res.json())).not.toMatch(/ECONNREFUSED/);
   });
 });
