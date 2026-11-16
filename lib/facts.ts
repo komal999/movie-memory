@@ -33,8 +33,9 @@ export interface FactStore {
   /**
    * Run `fn` while holding an exclusive per-user lock. Concurrent callers for the
    * same user queue up; different users never block each other (barring hash collisions).
+   * `waited` is true if another request held the lock when this one arrived.
    */
-  withUserLock<T>(userId: string, fn: (store: FactStore) => Promise<T>): Promise<T>;
+  withUserLock<T>(userId: string, fn: (store: FactStore, lock: { waited: boolean }) => Promise<T>): Promise<T>;
 }
 
 export type FactGenerator = (movieTitle: string) => Promise<string>;
@@ -72,8 +73,12 @@ export function toPublicFact(f: StoredFact): PublicFact {
  *  2. Otherwise take the per-user lock and re-check. Requests that were queued
  *     behind a generation will find the fresh fact here and return it, so a burst
  *     of N requests produces exactly one OpenAI call.
- *  3. Still stale → generate, store, return.
+ *  3. Still stale and we got the lock without waiting → generate, store, return.
+ *     Still stale after WAITING means the holder's generation just failed: don't
+ *     retry a failing API, fall back instead (single-flight, even during an outage).
  *  4. Generation failed → return the newest (stale) fact if any, else an error.
+ *     Infrastructure errors (lock/transaction timeout, pool exhaustion) degrade
+ *     the same way instead of surfacing as a 500.
  */
 export async function getFactForUser(userId: string, deps: FactDeps): Promise<FactResult> {
   const { store, generate } = deps;
@@ -90,29 +95,37 @@ export async function getFactForUser(userId: string, deps: FactDeps): Promise<Fa
     return { ok: true, source: "cache", fact: toPublicFact(latest) };
   }
 
-  return store.withUserLock(userId, async (locked) => {
-    // Re-read under the lock: someone may have generated while we were waiting.
-    const current = await locked.findLatest(userId, movieTitle);
-    if (current && isWithinCacheWindow(current.createdAt, now())) {
-      return { ok: true, source: "cache", fact: toPublicFact(current) };
-    }
-
-    try {
-      const content = await generate(movieTitle);
-      const created = await locked.create({ userId, movieTitle, content, createdAt: now() });
-      return { ok: true, source: "generated", fact: toPublicFact(created) };
-    } catch (err) {
-      logError("[facts] generation failed", err);
-      if (current) {
-        return { ok: true, source: "fallback", fact: toPublicFact(current) };
+  try {
+    return await store.withUserLock(userId, async (locked, { waited }) => {
+      // Re-read under the lock: someone may have generated while we were waiting.
+      const current = await locked.findLatest(userId, movieTitle);
+      if (current && isWithinCacheWindow(current.createdAt, now())) {
+        return { ok: true, source: "cache", fact: toPublicFact(current) };
       }
-      return {
-        ok: false,
-        code: "GENERATION_FAILED",
-        message: "We couldn't come up with a fact right now. Please try again in a moment.",
-      };
-    }
-  });
+      if (waited) return fallbackOrError(current);
+
+      try {
+        const content = await generate(movieTitle);
+        const created = await locked.create({ userId, movieTitle, content, createdAt: now() });
+        return { ok: true, source: "generated", fact: toPublicFact(created) };
+      } catch (err) {
+        logError("[facts] generation failed", err);
+        return fallbackOrError(current);
+      }
+    });
+  } catch (err) {
+    logError("[facts] lock transaction failed", err);
+    return fallbackOrError(latest);
+  }
+}
+
+function fallbackOrError(stale: StoredFact | null): FactResult {
+  if (stale) return { ok: true, source: "fallback", fact: toPublicFact(stale) };
+  return {
+    ok: false,
+    code: "GENERATION_FAILED",
+    message: "We couldn't come up with a fact right now. Please try again in a moment.",
+  };
 }
 
 /** Authorization-scoped read of a single fact. null = not found OR not yours (indistinguishable on purpose). */

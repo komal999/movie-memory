@@ -44,6 +44,23 @@ describe.skipIf(!url)("Postgres FactStore", () => {
     expect(results.every((r) => r.ok)).toBe(true);
   });
 
+  it("outage burst: 8 concurrent requests → one OpenAI attempt, all fall back", async () => {
+    await prisma.fact.create({
+      data: { userId: "alice", movieTitle: "Alien", content: "old fact", createdAt: new Date(Date.now() - 600_000) },
+    });
+    const generate = vi.fn(async (): Promise<string> => {
+      await new Promise((r) => setTimeout(r, 100));
+      throw new Error("OpenAI timeout");
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => getFactForUser("alice", { store, generate, logError: () => {} })),
+    );
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(results.every((r) => r.ok && r.source === "fallback")).toBe(true);
+  });
+
   it("ownership: bob cannot read alice's fact by id", async () => {
     const r = await getFactForUser("alice", { store, generate: async () => "fact", logError: () => {} });
     const id = r.ok ? r.fact.id : "";

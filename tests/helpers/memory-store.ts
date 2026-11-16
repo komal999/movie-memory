@@ -4,6 +4,7 @@ import type { FactStore, StoredFact } from "@/lib/facts";
 export function createMemoryStore(users: Record<string, string | null>) {
   const facts: StoredFact[] = [];
   const locks = new Map<string, Promise<unknown>>();
+  const holders = new Map<string, number>(); // queued + running, per user
   let seq = 0;
 
   const store: FactStore = {
@@ -23,8 +24,12 @@ export function createMemoryStore(users: Record<string, string | null>) {
       return facts.find((f) => f.id === factId && f.userId === userId) ?? null;
     },
     withUserLock(userId, fn) {
+      const waited = (holders.get(userId) ?? 0) > 0;
+      holders.set(userId, (holders.get(userId) ?? 0) + 1);
       const prev = locks.get(userId) ?? Promise.resolve();
-      const run = prev.then(() => fn(store));
+      const run = prev
+        .then(() => fn(store, { waited }))
+        .finally(() => holders.set(userId, holders.get(userId)! - 1));
       locks.set(userId, run.catch(() => undefined));
       return run;
     },

@@ -109,20 +109,24 @@ Account / Session / VerificationToken   (standard Auth.js adapter tables)
 1. Load the user's favorite movie (no movie → `409 NO_MOVIE`).
 2. **Fast path, no lock:** if the newest fact for `(user, movie)` is less than 60s old, return it (`source: "cache"`).
 3. Otherwise **take the per-user lock** and **re-check**. A request that waited behind another generation finds the fresh fact here and returns it.
-4. Still stale: call OpenAI, insert the fact, return it (`source: "generated"`).
-5. OpenAI fails (timeout, 5xx, empty): return the newest stale fact if one exists (`source: "fallback"`), else `503 GENERATION_FAILED` with a friendly message. Details are logged server-side, never sent to the client.
+4. Still stale and this request got the lock **without waiting**: call OpenAI, insert the fact, return it (`source: "generated"`).
+5. Still stale **after waiting** means the holder's generation just failed. Don't retry a failing API: go straight to the fallback below.
+6. OpenAI fails (timeout, 5xx, empty), or the lock transaction itself fails (timeout, pool exhausted): return the newest stale fact if one exists (`source: "fallback"`), else `503 GENERATION_FAILED` with a friendly message. Details are logged server-side, never sent to the client.
 
 **The 60-second window.** `now - createdAt < 60_000ms`. 59.999s is a cache hit; exactly 60s regenerates. `createdAt` is written from the same app clock used for comparison, so DB and app clock skew or timezone can't shift the window.
 
 **Burst / idempotency protection: Postgres advisory lock.**
 
 ```sql
-SELECT pg_advisory_xact_lock(hashtext('fact:' || userId))   -- inside a transaction
+-- inside a transaction
+SELECT pg_try_advisory_xact_lock(hashtext('fact:' || userId));  -- got it? we generate
+SELECT pg_advisory_xact_lock(hashtext('fact:' || userId));      -- else queue, then re-check
 ```
 
-- Requests for the same user queue on the lock, so 10 refreshes or tabs produce **one** OpenAI call and **one** row. Verified by an integration test. With the lock removed, the same test fails with 8 calls.
+- Requests for the same user queue on the lock, so 10 refreshes or tabs produce **one** OpenAI call and **one** row. Verified by an integration test. With the lock removed, the same test fails.
+- **Single-flight holds during an outage too.** Only the request that got the lock without waiting calls OpenAI. If it fails, the waiters serve the fallback instead of each retrying (which would serialize N × 10s timeouts and blow the transaction timeout). An early version did exactly that; a timing probe caught it (3 requests → 2 OpenAI calls, 2 raw 500s), and an integration test now pins it.
 - The lock is transaction-scoped, so it's released on commit, rollback or crash. It can't get stuck, needs no cleanup job, and works across multiple server instances (unlike an in-memory lock).
-- A `hashtext` collision only means two users occasionally wait on each other. It never returns the wrong data, because every query still filters by `userId`.
+- A `hashtext` collision only means two users occasionally wait on each other (and the waiter may get its stale fact instead of a new one). It never returns the wrong data, because every query still filters by `userId`.
 - Different users never block each other.
 
 **Safe OpenAI integration**
@@ -143,9 +147,9 @@ SELECT pg_advisory_xact_lock(hashtext('fact:' || userId))   -- inside a transact
 
 | File | What it covers |
 |---|---|
-| `tests/facts.test.ts` | Cache boundary (59.999s vs 60s), regenerate after expiry, cache miss on movie change, burst → 1 generation, per-user isolation, fallback to stale fact, friendly error without leaking internals, **authorization** (can't read another user's fact, never served another user's cache even for the same movie) |
+| `tests/facts.test.ts` | Cache boundary (59.999s vs 60s), regenerate after expiry, cache miss on movie change, burst → 1 generation, per-user isolation, fallback to stale fact, outage burst → 1 attempt, lock-transaction failure → fallback, friendly error without leaking internals, **authorization** (can't read another user's fact, never served another user's cache even for the same movie) |
 | `tests/api-routes.test.ts` | 401 when signed out (service never called), session id is used, 503 error shape, 404 for another user's fact |
-| `tests/fact-store.integration.test.ts` | **Real Postgres**: advisory lock under 8 concurrent requests, ownership filter, per-user cache |
+| `tests/fact-store.integration.test.ts` | **Real Postgres**: advisory lock under 8 concurrent requests, outage burst (1 OpenAI attempt, all fall back), ownership filter, per-user cache |
 | `tests/validation.test.ts` | Trim, length bounds, control characters, non-strings |
 
 The fact service depends on a small `FactStore` interface. The logic runs against an in-memory store with a real per-user mutex in unit tests (fast, deterministic clock) and against Postgres in integration tests.
@@ -159,7 +163,7 @@ My background is backend and data infrastructure: Postgres schema design, ingest
 ## Key tradeoffs
 
 - **The lock is held during the OpenAI call.** This is the simplest correct design: waiters block briefly, then get the fresh fact. The cost is that a generating request holds one DB connection (and its transaction) for up to ~10s. That's fine at this scale. At high traffic I'd switch to a short-lived "generation lease" row (`INSERT … ON CONFLICT DO NOTHING`), release the connection during the OpenAI call, and let losers return the latest fact or poll.
-- **Waiting vs. returning immediately.** Queued requests wait (`pg_advisory_xact_lock`) rather than fail fast (`pg_try_advisory_xact_lock`). The user gets a real fact instead of a "try again" message.
+- **Waiting vs. returning immediately.** Queued requests wait for the holder rather than fail fast. The user gets the fresh fact instead of a "try again" message; if the holder failed, they get the stale fallback without a second OpenAI attempt.
 - **The fallback serves stale data** (labelled in the UI) rather than an error. A fun fact being a few minutes old is harmless.
 - **The cache window is per (user, movie), not global per movie.** Two users with the same favorite get separate facts. This follows the spec ("this user + movie") and keeps data ownership simple. A shared per-movie cache would cut OpenAI cost.
 - **Database sessions vs. JWT.** One extra DB read per request in exchange for instant revocation and no session data in cookies.

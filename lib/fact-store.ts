@@ -4,7 +4,8 @@ import type { FactStore, StoredFact } from "@/lib/facts";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 // The lock holder keeps a DB transaction open for the duration of the OpenAI call,
-// so the transaction timeout must comfortably exceed the OpenAI timeout.
+// so the transaction timeout must comfortably exceed the OpenAI timeout. Waiters
+// spend up to one OpenAI timeout queued, then never call OpenAI themselves.
 const LOCK_TX_TIMEOUT_MS = 15_000;
 const LOCK_TX_MAX_WAIT_MS = 5_000;
 
@@ -20,7 +21,8 @@ const factSelect = {
  * Postgres-backed FactStore.
  *
  * Burst protection uses a transaction-scoped advisory lock keyed on the user id:
- *   SELECT pg_advisory_xact_lock(hashtext('fact:' || userId))
+ *   SELECT pg_try_advisory_xact_lock(hashtext('fact:' || userId))  -- did we wait?
+ *   SELECT pg_advisory_xact_lock(hashtext('fact:' || userId))      -- if not, queue
  * It is released automatically on commit/rollback (including crashes), works
  * across multiple app instances, and needs no extra table or cleanup job.
  */
@@ -51,8 +53,14 @@ export function createPrismaFactStore(db: PrismaClient, tx: Db = db): FactStore 
     withUserLock(userId, fn) {
       return db.$transaction(
         async (lockedTx) => {
-          await lockedTx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`fact:${userId}`}))`;
-          return fn(createPrismaFactStore(db, lockedTx));
+          const key = `fact:${userId}`;
+          // Try first so we know whether another request was already generating.
+          const [{ acquired }] = await lockedTx.$queryRaw<{ acquired: boolean }[]>`
+            SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS acquired`;
+          if (!acquired) {
+            await lockedTx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+          }
+          return fn(createPrismaFactStore(db, lockedTx), { waited: !acquired });
         },
         { timeout: LOCK_TX_TIMEOUT_MS, maxWait: LOCK_TX_MAX_WAIT_MS },
       );

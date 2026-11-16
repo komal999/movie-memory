@@ -116,6 +116,45 @@ describe("getFactForUser — OpenAI failure handling", () => {
     expect(r).toMatchObject({ ok: false, code: "GENERATION_FAILED" });
     expect(!r.ok && r.message).not.toMatch(/500|OpenAI/); // no internals leaked
   });
+
+  it("outage burst: one OpenAI attempt, every request gets the stale fallback", async () => {
+    const t = setup();
+    await getFactForUser("alice", t.deps);
+    t.setClock(at(120_000));
+    t.generate.mockClear();
+    t.generate.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      throw new Error("timeout");
+    });
+
+    const results = await Promise.all(Array.from({ length: 5 }, () => getFactForUser("alice", t.deps)));
+
+    expect(t.generate).toHaveBeenCalledTimes(1); // waiters don't retry a failing API
+    expect(results.every((r) => r.ok && r.source === "fallback")).toBe(true);
+  });
+
+  it("outage burst with nothing cached: one OpenAI attempt, friendly errors", async () => {
+    const t = setup();
+    t.generate.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      throw new Error("timeout");
+    });
+
+    const results = await Promise.all(Array.from({ length: 5 }, () => getFactForUser("alice", t.deps)));
+
+    expect(t.generate).toHaveBeenCalledTimes(1);
+    expect(results.every((r) => !r.ok && r.code === "GENERATION_FAILED")).toBe(true);
+  });
+
+  it("a lock/transaction failure degrades to the stale fact instead of throwing", async () => {
+    const t = setup();
+    await getFactForUser("alice", t.deps);
+    t.setClock(at(120_000));
+    const store = { ...t.store, withUserLock: async () => Promise.reject(new Error("tx timeout")) };
+
+    const r = await getFactForUser("alice", { ...t.deps, store });
+    expect(r).toMatchObject({ ok: true, source: "fallback" });
+  });
 });
 
 describe("authorization", () => {
